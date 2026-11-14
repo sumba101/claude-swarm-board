@@ -1,0 +1,11 @@
+{
+  "name": "swarm-board",
+  "owner": { "name": "sumba101" },
+  "plugins": [
+    {
+      "name": "swarm-board",
+      "source": "./",
+      "description": "A shared SQLite board for Claude Code agent swarms."
+    }
+  ]
+}

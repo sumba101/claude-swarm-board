@@ -1,0 +1,10 @@
+{
+  "name": "swarm-board",
+  "displayName": "Swarm Board",
+  "version": "0.1.0",
+  "description": "A shared SQLite board for Claude Code agent swarms: claimable work units, structured findings, and posts pushed to every agent after each tool call.",
+  "author": { "name": "sumba101", "url": "https://github.com/sumba101" },
+  "repository": "https://github.com/sumba101/claude-swarm-board",
+  "license": "MIT",
+  "keywords": ["swarm", "multi-agent", "coordination", "sqlite"]
+}
