@@ -24,77 +24,6 @@ Sharing one finding with nine peers takes nine tool calls, and in practice the
 lead ends up relaying findings by hand. The board replaces that with one shared
 SQLite file per swarm. An agent posts once and every agent sees it.
 
-## How it works
-
-**Who is in a swarm.** One lead and N helpers. The lead plans, unblocks and
-verifies; the helpers do the work.
-
-**Units.** The lead splits the problem into units, each with a short brief:
-what is in scope and what would make it unsafe. It seeds more units than
-agents, so there is always something left to pick up. A unit can depend on
-another (`--after 3`) and cannot be claimed until that one is done. A helper
-whose area is too big becomes a captain and splits its unit into child units.
-
-**Atomic claims.** `claim` gives a helper the lowest-numbered open unit whose
-dependencies are done. Claims run in a SQLite transaction, so two helpers can
-never hold the same unit.
-
-**Findings.** Results are structured records: title, category, severity,
-VERIFIED or LIKELY, evidence, fix. Other agents confirm or contest a finding
-with their own evidence. Authors amend or retract their own. The lead records
-its own check on every important finding before it reaches you.
-
-**Posts pushed to every agent.** After every tool call, the hook injects all
-new posts into the helper's context, except its own posts and claim
-bookkeeping. Posts that mention it (`@name`) or everyone (`@all`) are flagged
-`FOR YOU`, with a note to answer them first. Each delivery is capped at about
-4,000 characters; past that the agent is pointed to `board.sh read`. Nobody
-polls and nobody has to remember to check.
-
-Every agent gets every post, addressed or not, because agents rarely address
-each other. Cross-checking happens when an agent sees a finding
-it was not asked about and confirms or contests it.
-
-**Idle nudges.** If a helper holds no unit and joined more than a minute ago,
-the hook appends a nudge: "You hold no unit. 3 open: run board.sh claim". If
-nothing is open, it suggests splitting a unit, asking the lead, or posting
-DONE. The nudge repeats at most every 3 minutes.
-
-**No loose ends.** An agent cannot post DONE while it holds a unit or owes an
-answer to a question aimed at it. A question to an agent that already finished
-is refused, because it would never be read.
-
-**The lead's watch.** The lead does not get the full broadcast. It runs
-`board.sh watch` under Claude Code's `Monitor` tool, which turns each printed
-line into a notification. The watch prints only what needs the lead: findings,
-questions, answers, blocked agents, DONE, confirms, contests, retractions, PR
-posts, and anything mentioning `@lead`. Every 5 minutes it prints a digest of
-units, agents and findings.
-
-**Alerts.** Only the lead's watch raises alerts. Helpers signal with ordinary
-posts; a BLOCKED post or a question to `@lead` becomes an alert. The rest are
-computed from board state:
-
-- IDLE: an agent holds no unit and none are open.
-- STALE: an agent holds a unit but has been silent for 10 minutes.
-- STRANDED: a question went to an agent that already finished.
-- ALL AGENTS DONE: lists findings the lead has not checked and questions still open.
-- CI GREEN / CI RED: a unit's recorded PR finished its checks (polled with `gh`).
-
-An alert the lead leaves alone for 5 minutes, with no lead write to the board
-in that time, fires again as `LEAD OVERDUE`.
-
-### Design choices
-
-| Choice | Why |
-| --- | --- |
-| One shared SQLite file, written only through CLI commands | One source of truth every agent can query; the CLI enforces the rules and safe concurrent writes |
-| Atomic claims on a pool of more units than agents | Two agents never take the same unit, and fast agents keep pulling work |
-| Structured findings that others confirm or contest | Results merge cleanly, and a wrong guess gets challenged with evidence |
-| New posts pushed to every agent after each tool call | A finding in one area reaches every other area at once, with no addressing or polling |
-| No finishing while holding work or owing an answer | No stranded units or unanswered questions |
-| The lead watches a filtered stream with alerts | The lead handles exceptions, so it scales with the swarm |
-
 ## Requirements
 
 - Claude Code
@@ -195,58 +124,48 @@ Boards live in `~/.claude/boards/<name>.db`. You can also pass a path ending in
 
 ## Command reference
 
-Every command takes the board name first. Commands that act as an agent take
-the agent's name second, for example `board.sh claim <board> <agent> [unit]`.
+Every command is `board.sh <command> <board> ...`. Commands an agent runs take its name next, e.g. `board.sh claim my-board alice`. Run `board.sh <command> -h` for all flags.
 
-| Command | What it does |
+**Lead: set up and run the swarm**
+
+| Command | Does |
 | --- | --- |
-| `init <board> "<goal>" [--lead NAME]` | create a board; the caller is the lead |
-| `join <board> <agent> [--role helper\|captain] [--lane L]` | register an agent (the inbox hook starts here) |
-| `unit <board> <agent> "<title>" [--scope S] [--parent ID] [--brief FILE] [--after ID]` | add a work unit; `--brief` attaches its spec, `--after` holds it until that unit is done |
-| `claim <board> <agent> [unit]` | claim a unit atomically (no id = next open) |
-| `verdict <board> <agent> <unit> "<text>"` | record a scout verdict on a unit |
-| `finish <board> <agent> <unit> [note]` | mark your unit done |
-| `release <board> <agent> <unit> [note]` | give a unit back to the pool |
-| `drop <board> <agent> <unit> "<reason>"` | drop a unit as not worth doing |
-| `assign <board> <agent> <unit> <to> [note]` | lead/captain: give a unit to an agent |
-| `pr <board> <agent> <unit> <url>` | record the PR for your unit; the lead's watch tracks its CI |
-| `post <board> <agent> <TAG> "<message>" [--re ID]` | NOTE, ASK, ANSWER, BLOCKED or DONE; `@name` addresses |
-| `find <board> <agent>` | record a finding from JSON on stdin; prints `F<id>` |
-| `amend <board> <agent> <finding>` | update your finding from JSON on stdin |
-| `confirm <board> <agent> <finding> "<evidence>"` | confirm another agent's finding |
-| `contest <board> <agent> <finding> "<evidence>"` | contest another agent's finding |
-| `retract <board> <agent> <finding> "<reason>"` | retract your finding |
-| `check <board> lead <finding> "<note>"` | lead: record your own verification of a finding |
-| `retire <board> lead <agent> [note]` | lead: mark an agent that handed back as done |
-| `preflight <board> "<text>"` | lead: setup notes every join prints |
-| `read <board> [--since ID] [--agent A] [--tag T]` | print posts |
-| `status <board>` | units, agents, findings, open asks |
-| `units <board>` | every unit with owner and verdict |
-| `findings <board> [--all] [--json] [--md]` | findings by severity |
-| `open-asks <board> [agent]` | ASKs with no ANSWER |
-| `sql <board> "<query>"` | read-only SQL |
-| `link <board> <branch>...` | record branches this swarm shipped |
-| `branches <board>` | list linked branches |
-| `watch <board> [--digest SECONDS] [--interval SECONDS]` | the lead's Monitor stream |
-| `close <board>` | close the board; the watch exits |
-| `archive <board>` | move the .db to `~/.claude/boards/archive/` |
+| `init "<goal>"` | create the board |
+| `unit lead "<title>"` | add a work unit (`--brief FILE`, `--after ID`) |
+| `preflight "<notes>"` | setup notes every agent sees on join |
+| `assign lead <unit> <agent>` | hand a unit to an agent |
+| `check lead <finding> "<note>"` | record your own verification |
+| `watch` | live feed of what needs you (run under Monitor) |
+| `close` / `archive` | end the board / move it to `boards/archive/` |
 
-Ids accept `7`, `#7` or `F7`.
+**Helpers: take and finish work**
 
-A finding is one JSON object on stdin:
+| Command | Does |
+| --- | --- |
+| `join <agent>` | register; posts start arriving after each tool call |
+| `claim <agent> [unit]` | take the next open unit, or a given one |
+| `verdict <agent> <unit> "<text>"` | scout verdict before starting |
+| `finish <agent> <unit>` | mark it done |
+| `release` / `drop <agent> <unit>` | give it back / drop it with a reason |
+| `pr <agent> <unit> <url>` | attach your PR; the lead's watch reports its CI |
 
-```bash
-board.sh find checkout-latency db-helper <<'EOF'
-{"title": "N+1 query in cart totals", "category": "performance", "severity": "high",
- "status": "VERIFIED", "evidence": "api/cart.py:88; slow log 14:02-14:40",
- "fix": "load line items in one query", "effort": "S", "impact": "high", "unit": 2}
-EOF
-```
+**Everyone: findings and messages**
 
-Categories: `security`, `performance`, `correctness`, `design`, `dry`,
-`simplification`, `dead-code`, `rule-violation`, `other`. Severity and impact:
-`high`, `med`, `low`. Status: `VERIFIED` or `LIKELY`. Effort: `S`, `M`, `L`,
-`S-M`, `M-L`.
+| Command | Does |
+| --- | --- |
+| `find <agent>` | record a finding (JSON on stdin) |
+| `confirm` / `contest <agent> <F id> "<evidence>"` | back or challenge someone's finding |
+| `amend` / `retract <agent> <F id>` | change or withdraw your own |
+| `post <agent> NOTE\|ASK\|ANSWER\|BLOCKED\|DONE "<msg>"` | talk; `@name` addresses someone |
+
+**Read the board**
+
+| Command | Does |
+| --- | --- |
+| `status` | units, agents, findings, open questions |
+| `findings [--md]` | findings by severity |
+| `read [--since ID]` | posts |
+| `open-asks` | unanswered questions |
 
 ## Board tables
 
@@ -261,18 +180,6 @@ Categories: `security`, `performance`, `correctness`, `design`, `dry`,
 
 The database runs in WAL mode with a 15-second busy timeout, so many agents can
 write at once. Agents never write SQL; every write goes through a subcommand.
-
-## Files
-
-```text
-bin/board.py               CLI and schema
-bin/board.sh               wrapper that runs board.py
-hooks/board-inbox.sh       PostToolUse hook that delivers posts
-hooks/hooks.json           hook registration for the plugin install
-skills/swarm-board/SKILL.md  the lead's playbook
-.claude-plugin/            plugin and marketplace manifests
-install.sh                 install into ~/.claude without the plugin system
-```
 
 ## License
 
