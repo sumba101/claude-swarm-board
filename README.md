@@ -18,7 +18,9 @@ Claude Code's built-in `SendMessage` is point to point:
 
 - The sender must know each recipient's name and address it explicitly.
 - Telling everyone means one message per recipient.
-- There is no shared view of who is doing what or what has been found.
+- Agent teams add a shared task list, but there is no shared record of what
+  has been found, and nothing alerts the lead when a question goes unanswered
+  or a helper stalls.
 
 Sharing one finding with nine peers takes nine tool calls, and in practice the
 lead ends up relaying findings by hand. The board replaces that with one shared
@@ -30,7 +32,6 @@ SQLite file per swarm. An agent posts once and every agent sees it.
 - `python3` (3.8 or later; uses only the standard library, including `sqlite3`)
 - `jq` (the hook parses its input with it, and `install.sh` edits settings with it)
 - `bash`
-- `gh`, only if you want the lead's watch to poll PR checks
 
 ## Install
 
